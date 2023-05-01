@@ -185,13 +185,13 @@ def delete_user(current_user):
 def get_user(current_user):
     user  = User.query.filter_by(id=current_user.id).first()
     if user:
-        Profile  = Profile.query.filter_by(user_id=current_user.id).first()
+        profile  = Profile.query.filter_by(user_id=current_user.id).first()
         if Profile:
             return {
                     "message": "User fetched successfully!",
                     "data": {
                         "user": user.to_json(),
-                        "Profile": Profile.to_json()
+                        "Profile": Profile.to_json(profile)
                     },
                     "error": None
                 }, 200
@@ -208,13 +208,13 @@ def get_user(current_user):
 def get_user_by_username(current_user,username):
     user = User.query.filter_by(user=username).first()
     if user:
-        Profile  = Profile.query.filter_by(user_id=user.id).first()
+        profile  = Profile.query.filter_by(user_id=user.id).first()
         if Profile:
             return {
                     "message": "User fetched successfully!",
                     "data": {
                         "user": user.to_json(),
-                        "Profile": Profile.to_json()
+                        "Profile": Profile.to_json(profile)
                     },
                     "error": None
                 }, 200
@@ -919,78 +919,6 @@ def get_feeds(current_user):
         "data": None,
         "error": "Not Found"
     }, 404
-
-
-
-# @app.route("/api/feeds", methods=["GET"] , endpoint="get_feeds")
-# @token_required
-# def get_feeds(current_user):
-#     start  = perf_counter_ns()
-#     following = get_following_posts(current_user)
-#     posts = Post.query.filter(Post.user_id.in_(following)).order_by(Post.timestamp.desc()).all()
-#     if posts:
-#         posts = [post.to_json() for post in posts]
-#         for post in posts:
-#             post_data, user, comments, likes = get_post_details(post['id'])
-#             post["user"] = user.to_json()
-#             post["comments"] = [comment.to_json() for comment in comments]
-#             for comment in post["comments"]:
-#                 comment["user"] = User.query.filter_by(id=comment["user_id"]).first().to_json()
-#             post["likes"] = [User.query.filter_by(id=like.user_id).first().to_json() for like in likes]
-
-#             # post["likes"] = [User.query.filter_by(id=like["user_id"]).first().to_json() for like in likes]
-#         end = perf_counter_ns()
-#         print("time taken to fetch posts: ", (end-start)/1000000)
-#         return {
-#             "message": "Posts fetched successfully!",
-#             "data": posts,
-#             "error": None
-#         }, 200
-
-#     return {
-#         "message": "No posts found!",
-#         "data": None,
-#         "error": "Not Found"
-#     }, 404
-    # following = Follow.query.filter_by(follower_id=current_user.id).all()
-    # following = [following.followed_id for following in following]
-    # following.append(current_user.id)
-    # posts = Post.query.filter(Post.user_id.in_(following)).order_by(Post.timestamp.desc()).all()
-    # if posts:
-    #     posts = [post.to_json() for post in posts]
-    #     for post in posts:
-    #         userid  = Post.query.filter_by(id=post['id']).first().user_id
-    #         user = User.query.filter_by(id=userid).first()
-    #         post["user"] = user.to_json()
-    #         post["comments"] = Comments.query.filter_by(post_id=post["id"]).all()
-    #         post["comments"] = [comment.to_json() for comment in post["comments"]]
-    #         for comment in post["comments"]:
-    #             comment["user"] = User.query.filter_by(id=comment["user_id"]).first().to_json()
-
-    #         #  names of users who liked the post
-    #         likes = Likes.query.filter_by(post_id=post["id"]).all()
-    #         likes = [like.to_json() for like in likes]
-    #         post["likes"] = [User.query.filter_by(id=like["user_id"]).first().to_json() for like in likes]
-    #     end = perf_counter_ns()
-    #     # print("time taken to fetch posts: " , (end-start)/1000000)
-    #     # prict end - start in sec
-    #     print("time taken to fetch posts: " , (end-start))
-    #     return {
-    #         "message": "Posts fetched successfully!",
-    #         "data": posts,
-    #         "error": None
-    #     }, 200
-   
-    # return {
-    #     "message": "No posts found!",
-    #     "data": None,
-    #     "error": "Not Found"
-    # }, 404
-            
-
-
-
-
 #  celery tasks
 from app import tasks
 @app.route("/api/tasks/<string:name>", methods=["GET"] , endpoint="get_tasks")
