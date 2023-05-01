@@ -1,0 +1,1237 @@
+from logging import Logger
+from app.app import app , db
+from app.models import Follow, User
+from flask import request, jsonify
+import jwt
+from datetime import datetime
+from app.util import  token_required
+from flask_restful import Resource
+from werkzeug.utils import secure_filename
+from app.util import allowed_file
+from app.models import User , Profile , Post , Likes , Comments
+import os
+from time import perf_counter_ns
+# user  CRUD
+@app.route("/api/users/create", methods=["POST"])
+def create_user():
+    data = request.get_json()
+    if not data or not data["username"] or not data["email"] or not data["password"]:
+        return {
+            "message": "data required",
+            "data": None,
+            "error": "Bad Request"
+        }, 400
+    if User().get_by_username(data["username"]):
+        return {
+            "message": "User already exists!",
+            "data": None,
+            "error": "Bad Request"
+        }, 400
+    new_user = User(
+        user=data["username"],
+        email=data["email"],
+        password=data["password"],
+        last_seen=datetime.now()
+    )
+    new_user.save()
+    user = User().get_by_username(data["username"])
+    newprofile = Profile(user_id =user.id , no_of_posts=0 , no_of_followers=0 , no_of_following=0)
+    newprofile.save()
+    return {
+        "message": "User created successfully! name  :" + str(new_user.user)+"id :"+str(new_user.id)+"email :  "+str(new_user.email),
+        "data": new_user.to_json(),
+        "error": None
+    }, 201 
+
+
+# login user  sucess
+@app.route("/api/users/login", methods=["POST"])
+def login_api():
+    try:
+        data = request.json
+        if not data:
+            return {
+                "message": "Please provide user details",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        user = User().login(
+            data["username"],
+            data["password"]
+        )
+        if user:
+            try:
+                # token should expire after 24 hrs
+                user["id"] = jwt.encode(
+                    {"id": user["id"]},
+                    app.config["SECRET_KEY"],
+                    algorithm="HS256"
+                )
+                return {
+                    "message": "Successfully fetched auth token",
+                    "data": user
+                }
+            except Exception as e:
+                return {
+                    "error": "Something went wrong here",
+                    "message": str(e)
+                }, 500
+        return {
+            "message": "Error fetching auth token!, invalid email or password",
+            "data": None,
+            "error": "Unauthorized"
+        }, 404
+    except Exception as e:
+        return {
+                "message": "Something went wrong! here is th error",
+                "error": str(e),
+                "data": None
+        }, 500
+
+
+# get all users
+@app.route("/api/all", methods=["GET"], endpoint="get_all_users")
+@token_required
+def get_all_users(current_user):
+    try:
+        users = User.query.all()
+        if users:
+            users = [user.to_json() for user in users]
+            return {
+                "message": "Users fetched successfully!",
+                "data": users,
+                "error": None
+            }, 200
+        return {
+            "message": "No users found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+
+
+#  delete User  sucess
+@app.route("/api/users/delete", methods=["POST"])
+@token_required
+def delete_user(current_user):
+    try:
+        data = request.get_json()
+        if not data or not data["password"]:
+            return {
+                "message": "Please provide password!",
+                "data": None,
+                "error": "Bad Request"
+            }, 400
+        user = User().get_by_id(current_user.id)
+        if user:
+            if not user.password == data["password"]:
+                return {
+                    "message": "Invalid password!",
+                    "data": None,
+                    "error": "Bad Request"
+                }, 400
+            Profile .query.filter_by(user_id=current_user.id).delete()
+            Post.query.filter_by(user_id=current_user.id).delete()
+            Likes.query.filter_by(user_id=current_user.id).delete()
+            Comments.query.filter_by(user_id=current_user.id).delete()
+            Follow.query.filter_by(followed_id=current_user.id).delete()
+            #  decrease the no of followers of the user who is following the current user
+            followers = Follow.query.filter_by(followed_id=current_user.id).all()
+            for follower in followers:
+                Profile = Profile.query.filter_by(user_id=follower.follower_id).first()
+                Profile.no_of_followers -= 1
+                Profile.save()
+            Follow.query.filter_by(follower_id=current_user.id).delete()
+            #  decrease the no of following of the user who is followed by the current user
+            followings = Follow.query.filter_by(follower_id=current_user.id).all()
+            for following in followings:
+                Profile = Profile.query.filter_by(user_id=following.followed_id).first()
+                Profile.no_of_following -= 1
+                Profile.save()
+
+            user.delete()
+
+            return {
+                "message": "User deleted successfully!"+str(user.user),
+                "data": None,
+                "error": None
+            }, 200
+        return {
+            "message": "User not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+
+
+
+#  read user and Profile sucess
+@app.route("/api/user", methods=["GET"] , endpoint="get_user")
+@token_required
+def get_user(current_user):
+    user  = User.query.filter_by(id=current_user.id).first()
+    if user:
+        Profile  = Profile.query.filter_by(user_id=current_user.id).first()
+        if Profile:
+            return {
+                    "message": "User fetched successfully!",
+                    "data": {
+                        "user": user.to_json(),
+                        "Profile": Profile.to_json()
+                    },
+                    "error": None
+                }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+
+#   get  user by username
+@app.route('/api/users/<string:username>', methods=['GET'] , endpoint="get_user_by_username")
+@token_required
+def get_user_by_username(current_user,username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        Profile  = Profile.query.filter_by(user_id=user.id).first()
+        if Profile:
+            return {
+                    "message": "User fetched successfully!",
+                    "data": {
+                        "user": user.to_json(),
+                        "Profile": Profile.to_json()
+                    },
+                    "error": None
+                }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+@app.route("/api/user", methods=["PUT"], endpoint="update_user")
+@token_required
+def update_user(current_user):
+    Profile = Profile.query.filter_by(user_id=current_user.id).first()
+    user = User.query.filter_by(id=current_user.id).first()
+    if user:
+        # get form data
+        data = request.form 
+        if not data:
+            return {
+                "message": "Please provide user details",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        user.email = data["email"]
+        if data['report_type'] == 'html format':
+            Profile.report_type = 'html'
+
+        else:
+            data['report_type'] == 'pdf'
+        # Profile.image = data["image"]
+        # handel image and save it to the database
+        if request.files:
+            image = request.files['image']
+            # save image to the database
+            Profile.image = image.read()
+        user.update()
+        Profile.update()
+        return {
+            'message':  'User updated successfully!',
+            'data': {
+                'user': user.to_json(),
+                # 'Profile': Profile.to_json()
+            },
+            'error': None
+        }, 200
+    return {
+        'message': 'User not found!',
+        'data': None,
+        'error': 'Not Found'
+    }, 404
+    
+
+
+
+
+# read Posts sucess
+@app.route("/api/posts", methods=["GET"] , endpoint="get_posts")
+@token_required
+def get_posts(current_user):
+    user  =     User.query.filter_by(id=current_user.id).first()
+    if user:
+        posts  = Post.query.filter_by(user_id=current_user.id).all()
+        if posts:
+            return {
+                    "message": "Posts fetched successfully!",
+                    "data": {
+                        "posts": [post.to_json() for post in posts]
+                    },
+                    "error": None
+                }, 200
+    return {
+        "message": "Posts not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+# get all  post of username 
+@app.route('/api/users/<string:username>/posts', methods=['GET'] , endpoint="get_posts_by_username")
+@token_required
+def get_posts_by_username(current_user,username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        posts  = Post.query.filter_by(user_id=user.id).all()
+        if posts:
+            return {
+                    "message": "Posts fetched successfully!",
+                    "data": {
+                        "posts": [post.to_json() for post in posts]
+                    },
+                    "error": None
+                }, 200
+    return {
+        "message": "Posts not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+ 
+#single post  sucess
+@app.route("/api/posts/<int:post_id>", methods=["GET"] , endpoint="get_post")
+@token_required
+def get_post(current_user , post_id):
+    post  = Post.query.filter_by(id=post_id).first()
+    if post:
+        postcomment = Comments.query.filter_by(post_id=post_id).all()      
+        postliked = Likes.query.filter_by(post_id=post_id).all()
+        user  = User.query.filter_by(id=post.user_id).first()
+        return {
+                    "message": "Post fetched successfully!",
+                    "data": {
+                        "user": user.to_json(),
+                        "post": post.to_json(),
+                        "postlikedby": [postlike.to_json() for postlike in postliked],
+                        "postcommentedby": [postcomment.to_json() for postcomment in postcomment]
+                    },
+                    "error": None
+                }, 200
+    return{
+                "message": "Post not found!",
+                "data": None,
+                "error": "Not Found"
+
+            }
+
+# # create post sucess
+@app.route("/api/posts", methods=["POST"] , endpoint="create_post")
+@token_required
+def create_post(current_user):
+    app.logger.info("create post")
+    title = request.form['title']
+    description = request.form['description']
+    app.logger.info(title)
+    file = request.files['file']
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        app.logger.info("-----------------" + filename)
+    if not title:
+        return {
+            "message": "Please provide post details",
+            "data": None,
+            "error": "Bad request"
+        }, 400
+    user = User().get_by_id(current_user.id)
+    if user:
+        post = Post(
+            user_id = user.id,
+            title = title,
+            caption = description,
+            imgpath= filename,
+            timestamp= datetime.now()
+        )
+        user = Profile().query.filter_by(user_id=current_user.id).first()
+
+        user.no_of_posts = user.no_of_posts + 1
+        user.save()
+        post.save()
+        return {
+            "message": "Post created successfully!",
+            "data": post.to_json(),
+            "error": None
+        }, 201
+
+# update post  sucess
+@app.route("/api/posts/<int:post_id>", methods=["PUT"] , endpoint="update_post")
+@token_required
+def update_post(current_user , post_id):
+    post  = Post.query.filter_by(id = post_id).first()
+    app.logger.info("update post")
+    # json data
+    data = request.get_json()
+    # title = data['title']
+    if data['title']:
+        title = data['title']
+        post.title = title
+    if data['description']:
+        description = data['description']
+        post.caption = description
+    post.timestamp = datetime.now()
+    user = User().get_by_id(current_user.id)
+    if user:
+        post.save()
+        return {
+            "message": "Post updated successfully!",
+            "data": post.to_json(),
+            "error": None
+        }, 201
+
+# delete post sucess
+@app.route("/api/posts/<int:post_id>", methods=["DELETE"] , endpoint="delete_post")
+@token_required
+def delete_post(current_user , post_id):
+    try:
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                Likes = Likes.query.filter_by(post_id=post_id).all()
+                if Likes:
+                    for postlike in Likes:
+                        postlike.delete()
+                comments = Comments.query.filter_by(post_id=post_id).all()
+                if comments:
+                    for comment in comments:
+                        comment.delete()
+                profile = Profile.query.filter_by(user_id=user.id).first()
+                profile.no_of_posts = profile.no_of_posts - 1
+                profile.save()
+                post.delete()
+                return {
+                    "message": "Post deleted successfully!",
+                    "data": None,
+                    "error": None
+                }, 200
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+# like post
+@app.route("/api/posts/<int:post_id>/like", methods=["POST"] , endpoint="like_post")
+@token_required
+def like_post(current_user , post_id):
+    try:
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                postlike = Likes(
+                    user_id = user.id,
+                    post_id = post.id,
+                )
+            duplicate  = Likes.query.filter_by(user_id=user.id , post_id=post.id).first()
+            if duplicate:
+                duplicate.delete()
+                post.no_of_likes = Likes.query.filter_by(post_id=post_id).count()
+                post.save()
+                return {
+                    "message": "Post unliked successfully!",
+                    "data": None,
+                    "error": None
+                }, 201
+            else:
+                postlike.save()
+                post.no_of_likes = Likes.query.filter_by(post_id=post_id).count()
+                post.save()
+                return {
+                    "message": "Post liked successfully!",
+                    "data": postlike.to_json(),
+                    "error": None
+                }, 201
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+# comment on post sucess
+@app.route("/api/posts/<int:post_id>/comment", methods=["POST"] , endpoint="comment_post")
+@token_required
+def comment_post(current_user , post_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return {
+                "message": "Please provide comment details",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                comment = Comments(
+                    user_id = user.id,
+                    post_id = post.id,
+                    comment = data.get("comment"),
+                    timestamp = datetime.now()
+                )
+                comment.save()
+                
+                #   all comment on post with username
+                comments = Comments.query.filter_by(post_id=post_id).all()
+                comments = [comment.to_json() for comment in comments]
+                for comment in comments:
+                    user  = User().get_by_id(comment['user_id'])
+                    comment['user'] = user.to_json()
+                return {
+                    "message": "Comment added successfully!",
+                    "data": comments,
+                    "error": None
+                }, 201
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+# commnet with specific response
+@app.route("/api/posts/comment/<int:post_id>", methods=["POST"] , endpoint="comment_res")
+@token_required
+def comment_res(current_user , post_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return {
+                "message": "Please provide comment details",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                comment = Comments(
+                    user_id = user.id,
+                    post_id = post.id,
+                    comment = data.get("comment"),
+                    timestamp = datetime.now()
+                )
+                comment.save()
+                return {
+                    "message": "Comment added successfully!",
+                    "data": comment.to_json(),
+                    "error": None
+                }, 201
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+
+# delete comment sucess
+@app.route("/api/posts/<int:post_id>/comment/<int:comment_id>", methods=["DELETE"] , endpoint="delete_comment")
+@token_required
+def delete_comment(current_user , post_id , comment_id):
+    try:
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                comment = Comments.query.filter_by(id=comment_id , user_id=user.id , post_id=post.id).first()
+                if comment:
+                    comment.delete()
+                    return {
+                        "message": "Comment deleted successfully!",
+                        "data": None,
+                        "error": None
+                    }, 200
+        return {
+            "message": "Comment not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+# get all comments sucess
+@app.route("/api/posts/<int:post_id>/comments", methods=["GET"] , endpoint="get_comments")
+@token_required
+def get_comments(current_user , post_id):
+    try:
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                comments = Comments.query.filter_by(post_id=post.id).all()
+                if comments:
+                    return {
+                        "message": "Comments fetched successfully!",
+                        "data": [comment.to_json() for comment in comments],
+                        "error": None
+                    }, 200
+                return {
+                    "message": "No comments found!",
+                    "data": None,
+                    "error": "Not Found"
+                }, 404
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+# get all likes  sucess
+@app.route("/api/posts/<int:post_id>/likes", methods=["GET"] , endpoint="get_likes")
+@token_required
+def get_likes(current_user , post_id):
+    try:
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                likes = Likes.query.filter_by(post_id=post.id).all()
+                if likes:
+                    return {
+                        "message": "Likes fetched successfully!",
+                        "data": [like.to_json() for like in likes],
+                        "error": None
+                    }, 200
+                return {
+                    "message": "No likes found!",
+                    "data": None,
+                    "error": "Not Found"
+                }, 404
+        return {
+            "message": "Post not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+
+# update comment sucess
+@app.route("/api/posts/<int:post_id>/comment/<int:comment_id>", methods=["PUT"] , endpoint="update_comment")
+@token_required
+def update_comment(current_user , post_id , comment_id):
+    try:
+        data = request.get_json()
+        if not data:
+            return {
+                "message": "Please provide comment details",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        user = User().get_by_id(current_user.id)
+        if user:
+            post = Post().get_by_id(post_id)
+            if post:
+                comment = Comments.query.filter_by(id=comment_id , user_id=user.id , post_id=post.id).first()
+                if comment:
+                    comment.comment = data.get("comment")
+                    comment.save()
+                    return {
+                        "message": "Comment updated successfully!",
+                        "data": comment.to_json(),
+                        "error": None
+                    }, 200
+        return {
+            "message": "Comment not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+
+
+# # search users with string 
+# @app.route("/api/users/search/<string:search_string>", methods=["GET"] , endpoint="search_users")
+# def search_users(search_string):
+#     try:
+#         users = User.query.filter(User.user.ilike("%"+search_string+"%")).all()
+#         if users:
+#             return {
+#                     "message": "Users fetched successfully!",
+#                     "data": [user.to_json() for user in users],
+#                     "error": None
+#                 }, 200
+#         return {
+#                 "message": "No users found!",
+#                 "data": None,
+#                 "error": "Not Found"
+#             }, 404
+#     except Exception as e:
+#         return {
+#             "message": "Something went wrong!",
+#             "error": str(e),
+#             "data": None
+#         }, 500
+
+
+
+#  get  followers of user form table Follow
+@app.route("/api/users/<string:user>/followers", methods=["GET"] , endpoint="get_followers")
+@token_required
+def get_followers(current_user , user):
+    try:
+        user = User.query.filter_by(user=user).first()
+        if user:
+            followers = Follow.query.filter_by(followed_id=user.id).all()
+            if followers:
+                # get user names of followers
+                followers = [User.query.filter_by(id=follower.follower_id).first() for follower in followers]
+                return {
+                    "message": "Followers fetched successfully!",
+                    "data": [follower.to_json() for follower in followers],
+                    "error": None
+                }, 200
+            return {
+                "message": "No followers found!",
+                "data": None,
+                "error": "Not Found"
+            }, 404
+        return {
+            "message": "User not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+#  get  followings of user form table Follow
+@app.route("/api/users/<string:user>/followings", methods=["GET"] , endpoint="get_followings")
+@token_required
+def get_followings(current_user , user):
+    try:
+        user = User.query.filter_by(user=user).first()
+        if user:
+            followings = Follow.query.filter_by(follower_id=user.id).all() # kis kis ko follow krta h user
+            if followings:
+                # get user names of folowings
+                followings = [User.query.filter_by(id=following.followed_id).first() for following in followings]
+                return {
+                    "message": "Followings fetched successfully!",
+                    "data": [following.to_json() for following in followings],
+                    "error": None
+                }, 200
+            return {
+                "message": "No followings found!",
+                "data": None,
+                "error": "Not Found"
+            }, 404
+        return {
+            "message": "User not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+#  follow  or unfollow user 
+@app.route("/api/users/<string:user>/follow", methods=["POST"] , endpoint="follow_user")
+@token_required
+def follow_user(current_user , user):
+    try:
+        user = User.query.filter_by(user=user).first()
+        if user:
+            if user.id == current_user.id:
+                return {
+                    "message": "You can't follow yourself!",
+                    "data": None,
+                    "error": "Bad request"
+                }, 400
+            follow = Follow.query.filter_by(follower_id=current_user.id , followed_id=user.id).first()
+            if not follow:
+                follow = Follow(follower_id=current_user.id , followed_id=user.id)
+                follow.save()
+                followed = Profile.query.filter_by(user_id=user.id).first()
+                followed.no_of_followers += 1
+                followed.save()
+                follower = Profile.query.filter_by(user_id=current_user.id).first()
+                follower.no_of_following += 1
+                follower.save()
+                return {
+                    "message": "User followed successfully!",
+                    "data": follow.to_json(),
+                    "error": None
+                }, 200
+            return {
+                "message": "User already followed!",
+                "data": follow.to_json(),
+                "error": None
+            }, 200
+        
+        return {
+            "message": "User not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+
+#  unfollow user
+@app.route("/api/users/<string:user>/unfollow", methods=["POST"] , endpoint="unfollow_user")
+@token_required
+def unfollow_user(current_user , user):
+    try:
+        user = User.query.filter_by(user=user).first()
+        if user:
+            follow = Follow.query.filter_by(follower_id=current_user.id , followed_id=user.id).first()
+            if follow:
+                follow.delete()
+                followed = Profile.query.filter_by(user_id=user.id).first()
+                followed.no_of_followers -= 1
+                followed.save()
+                follower = Profile.query.filter_by(user_id=current_user.id).first()
+                follower.no_of_following -= 1
+                follower.save()
+                return {
+                    "message": "User unfollowed successfully!",
+                    "data": follow.to_json(),
+                    "error": None
+                }, 200
+            return {
+                "message": "You don't follow this user!",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        return {
+            "message": "User not found!",
+            "data": None,
+            "error": "Not Found"
+        }, 404
+    except Exception as e:
+        return {
+            "message": "Something went wrong!",
+            "error": str(e),
+            "data": None
+        }, 500
+from app.cache import get_post_details , get_following_posts
+
+
+@app.route("/api/feeds", methods=["GET"], endpoint="get_feeds")
+@token_required
+def get_feeds(current_user):
+    start = perf_counter_ns()
+    following = get_following_posts(current_user)
+    posts = Post.query.filter(Post.user_id.in_(following)).order_by(Post.timestamp.desc()).all()
+    if posts:
+        posts = [post.to_json() for post in posts]
+        for post in posts:
+            post_data, user, comments, likes = get_post_details(post['id'])
+            post["user"] = user.to_json()
+            post["comments"] = [comment.to_json() for comment in comments]
+            for comment in post["comments"]:
+                comment["user"] = User.query.filter_by(id=comment["user_id"]).first().to_json()
+            post["likes"] = [User.query.filter_by(id=like.user_id).first().to_json() for like in likes]
+
+        end = perf_counter_ns()
+        print("time taken to fetch posts: ", (end-start)/1000000)
+        return {
+            "message": "Posts fetched successfully!",
+            "data": posts,
+            "error": None
+        }, 200
+
+    return {
+        "message": "No posts found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+
+
+# @app.route("/api/feeds", methods=["GET"] , endpoint="get_feeds")
+# @token_required
+# def get_feeds(current_user):
+#     start  = perf_counter_ns()
+#     following = get_following_posts(current_user)
+#     posts = Post.query.filter(Post.user_id.in_(following)).order_by(Post.timestamp.desc()).all()
+#     if posts:
+#         posts = [post.to_json() for post in posts]
+#         for post in posts:
+#             post_data, user, comments, likes = get_post_details(post['id'])
+#             post["user"] = user.to_json()
+#             post["comments"] = [comment.to_json() for comment in comments]
+#             for comment in post["comments"]:
+#                 comment["user"] = User.query.filter_by(id=comment["user_id"]).first().to_json()
+#             post["likes"] = [User.query.filter_by(id=like.user_id).first().to_json() for like in likes]
+
+#             # post["likes"] = [User.query.filter_by(id=like["user_id"]).first().to_json() for like in likes]
+#         end = perf_counter_ns()
+#         print("time taken to fetch posts: ", (end-start)/1000000)
+#         return {
+#             "message": "Posts fetched successfully!",
+#             "data": posts,
+#             "error": None
+#         }, 200
+
+#     return {
+#         "message": "No posts found!",
+#         "data": None,
+#         "error": "Not Found"
+#     }, 404
+    # following = Follow.query.filter_by(follower_id=current_user.id).all()
+    # following = [following.followed_id for following in following]
+    # following.append(current_user.id)
+    # posts = Post.query.filter(Post.user_id.in_(following)).order_by(Post.timestamp.desc()).all()
+    # if posts:
+    #     posts = [post.to_json() for post in posts]
+    #     for post in posts:
+    #         userid  = Post.query.filter_by(id=post['id']).first().user_id
+    #         user = User.query.filter_by(id=userid).first()
+    #         post["user"] = user.to_json()
+    #         post["comments"] = Comments.query.filter_by(post_id=post["id"]).all()
+    #         post["comments"] = [comment.to_json() for comment in post["comments"]]
+    #         for comment in post["comments"]:
+    #             comment["user"] = User.query.filter_by(id=comment["user_id"]).first().to_json()
+
+    #         #  names of users who liked the post
+    #         likes = Likes.query.filter_by(post_id=post["id"]).all()
+    #         likes = [like.to_json() for like in likes]
+    #         post["likes"] = [User.query.filter_by(id=like["user_id"]).first().to_json() for like in likes]
+    #     end = perf_counter_ns()
+    #     # print("time taken to fetch posts: " , (end-start)/1000000)
+    #     # prict end - start in sec
+    #     print("time taken to fetch posts: " , (end-start))
+    #     return {
+    #         "message": "Posts fetched successfully!",
+    #         "data": posts,
+    #         "error": None
+    #     }, 200
+   
+    # return {
+    #     "message": "No posts found!",
+    #     "data": None,
+    #     "error": "Not Found"
+    # }, 404
+            
+
+
+
+
+#  celery tasks
+from app import tasks
+@app.route("/api/tasks/<string:name>", methods=["GET"] , endpoint="get_tasks")
+def get_tasks(name):
+    jobs = tasks.sayhello.apply_async(args=[name])
+    result = jobs.wait()
+    return {
+        "message": "Task added to queue!",
+        "data":str(jobs) ,
+        "result" : result,
+        "error": None
+    }, 200
+
+# run task print date
+@app.route("/api/tasks", methods=["GET"] , endpoint="get_date")
+def get_date():
+    jobs = tasks.print_current_time.apply_async()
+    result = jobs.wait()
+    return {
+        "message": "Task added to queue!",
+        "data":str(jobs) ,
+        "result" : result,
+        "error": None
+    }, 200
+
+#  send mail using celery send_mail task
+@app.route('/send_email', methods=['POST'])
+def trigger_send_email():
+    subject = 'testing'
+    sender = 'shivam2003sy@outlook.com'
+    recipients = ['shivam2003sy@gmail.com', 'ankitayadav80048@gmail.com']
+    text_body = 'Plain text'
+    html_body = '<h1>I lOVE YOU ANKITA</h1> <h3> will you mary me <h3><img src="https://images.unsplash.com/photo-1606041008023-472dfb5e530f?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=388&q=80" alt="flower">'
+    
+    # Trigger the Celery task asynchronously
+    tasks.send_email.apply_async(args=[subject, sender, recipients, text_body, html_body])
+    return 'Email task scheduled'
+
+
+#  blog_to_csv task
+@app.route("/api/export/<username>", methods=["GET"] , endpoint="blog_to_csv")
+def blog_to_csv(username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        jobs = tasks.blog_to_csv.apply_async(args=[username])
+        result = jobs.wait()
+        # result  = 'added to queue'
+        # trigger when mail sent
+        if result:
+            return {
+                "message": "Task added to queue! you will get a mail soon with the csv file",
+                "data":str(jobs) ,
+                "result" : result,
+                "error": None
+            }, 200
+        return {
+            "message": "Something went wrong!",
+            "data": None,
+            "error": "Internal server error"
+        }, 500
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+#  csv_to_blog task
+
+@app.route("/api/import", methods=["POST"] , endpoint="csv_to_blog")
+@token_required
+def csv_to_blog(current_user):
+    if request.method == "POST":
+        if "file" not in request.files:
+            return {
+                "message": "No file found!.",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        file = request.files["file"]
+        if file.filename == "":
+            return {
+                "message": "No file found!",
+                "data": None,
+                "error": "Bad request"
+            }, 400
+        if file:
+            filename = '{}_blog.csv'.format(current_user.user)
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            jobs = tasks.csv_to_blog.apply_async(args=[filename , current_user.id])
+            result = jobs.wait()
+            if result:
+                return {
+                    "message": "Task added to queue!",
+                    "data":str(jobs) ,
+                    "result" : result,
+                    "error": None
+                }, 200
+            return {
+                "message": "Something went wrong!",
+                "data": None,
+                "error": "Internal server error"
+            }, 500
+        return {
+            "message": "File not supported!",
+            "data": None,
+            "error": "Bad request"
+        }, 400
+    return {
+        "message": "Bad request!",
+        "data": None,
+        "error": "Bad request"
+    }, 400
+
+
+#  search user functaionality
+from app.cache import get_user
+@app.route('/api/users', methods=['GET'], endpoint='search_users')
+def search_users():
+    search_term = request.args.get('search')
+    # Perform user search logic here based on the search_term
+    # and return the results as JSON response
+    # Example:
+    start = perf_counter_ns()
+    users = get_user(search_term)
+    # users = User.query.filter(User.user.like('%' + search_term + '%')).all()
+    end = perf_counter_ns()
+    print("time taken to search user : ", (end - start) / 1000000)
+    return {
+        "message": "Users fetched successfully!",
+        "data": [user.to_json() for user in users],
+        "error": None
+    }, 200
+
+
+#  call task verify email
+@app.route('/api/verify', methods=['POST'], endpoint='verify')
+@token_required
+def verify(current_user):
+    user = User.query.filter_by(id=current_user.id).first()
+    if user:
+        email = user.email
+    if email:
+        jobs = tasks.verify_email.apply_async(args=[email])
+        result = jobs.wait()
+        if result:
+            return {
+                "message": "Task added to queue!",
+                "data":str(jobs) ,
+                "result" : result,
+                "error": None
+            }, 200
+        return {
+            "message": "Something went wrong!",
+            "data": None,
+            "error": "Internal server error"
+        }, 500
+    return {
+        "message": "Email not found!",
+        "data": None,
+        "error": "Bad request"
+    }, 400
+
+# verify email
+@app.route('/api/verify/<email>', methods=['GET'], endpoint='verify_email')
+def verify_email(email):
+    user = User.query.filter_by(email=email).first()
+    if user:
+        if user.email_verified:
+            return {
+                "message": "Email already verified!",
+                "data": None,
+                "error": None
+            }, 200
+        user.email_verified = True
+        db.session.commit()
+        return {
+            "message": "Email verified successfully!",
+            "data": None,
+            "error": None
+        }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+
+
+
+#  get followers of user
+@app.route('/api/followers/<username> ', methods=['GET'], endpoint='get_followers_of_user')
+@token_required
+def get_followers_of_user(current_user,username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        followers = Follow.query.filter_by(followed_id=user.id).all()
+        return {
+            "message": "Followers fetched successfully!",
+            "data": [follower.to_json() for follower in followers],
+            "error": None
+        }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+
+
+# followings of user 
+@app.route('/api/followings/<username>', methods=['GET'], endpoint='get_followings_of_user')
+@token_required
+def get_followings_of_user(current_user,username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        following = Follow.query.filter_by(follower_id=user.id).all()
+        return {
+            "message": "Following fetched successfully!",
+            "data": [follow.to_json() for follow in following],
+            "error": None
+        }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
+
+# followers of user
+@app.route('/api/followers/<username>', methods=['GET'], endpoint='get_followers_of_user2')
+@token_required
+def get_followers_of_user2(current_user,username):
+    user = User.query.filter_by(user=username).first()
+    if user:
+        followers = Follow.query.filter_by(followed_id=user.id).all()
+        return {
+            "message": "Followers fetched successfully!",
+            "data": [follower.to_json() for follower in followers],
+            "error": None
+        }, 200
+    return {
+        "message": "User not found!",
+        "data": None,
+        "error": "Not Found"
+    }, 404
