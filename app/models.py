@@ -90,6 +90,9 @@ class User(UserMixin, db.Model):
         return User.query.filter_by(id=id).first()
     def get_by_username(self, username):
         return User.query.filter_by(user=username).first()
+    def get_by_email(self, email):
+        return User.query.filter_by(email=email).first()
+
     def get_all(self):
         return User.query.all()
     def __repr__(self):
@@ -101,7 +104,7 @@ class User(UserMixin, db.Model):
     def to_json(self):
         json_user = {
             'id': self.id,
-        'user': self.user,
+            'user': self.user,
             'email': self.email,
             'last_seen': self.last_seen,
             'email_verified': self.email_verified,
@@ -158,7 +161,8 @@ class Profile(db.Model):
             'no_of_posts': self.no_of_posts,
             'no_of_followers': self.no_of_followers,
             'no_of_following': self.no_of_following,
-            'report_type': self.report_type
+            'report_type': self.report_type,
+            'image': self.image_to_base64() if self.image else None
         }
         return json_user
     def delete(self):

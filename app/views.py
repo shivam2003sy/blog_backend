@@ -11,19 +11,28 @@ from app.util import allowed_file
 from app.models import User , Profile , Post , Likes , Comments
 import os
 from time import perf_counter_ns
+
 # user  CRUD
+
+# create user
 @app.route("/api/users/create", methods=["POST"])
 def create_user():
     data = request.get_json()
     if not data or not data["username"] or not data["email"] or not data["password"]:
         return {
-            "message": "data required",
+            "message": "Please provide all user details!",
             "data": None,
             "error": "Bad Request"
         }, 400
     if User().get_by_username(data["username"]):
         return {
             "message": "User already exists!",
+            "data": None,
+            "error": "Bad Request"
+        }, 400
+    if User().get_by_email(data["email"]):
+        return {
+            "message": "User with this email already exists!",
             "data": None,
             "error": "Bad Request"
         }, 400
@@ -38,13 +47,13 @@ def create_user():
     newprofile = Profile(user_id =user.id , no_of_posts=0 , no_of_followers=0 , no_of_following=0)
     newprofile.save()
     return {
-        "message": "User created successfully! name  :" + str(new_user.user)+"id :"+str(new_user.id)+"email :  "+str(new_user.email),
+        "message": "Successfully created user!",
         "data": new_user.to_json(),
         "error": None
-    }, 201 
+    }, 201
 
 
-# login user  sucess
+# login user
 @app.route("/api/users/login", methods=["POST"])
 def login_api():
     try:
@@ -131,13 +140,13 @@ def delete_user(current_user):
             }, 400
         user = User().get_by_id(current_user.id)
         if user:
-            if not user.password == data["password"]:
+            if user.password != data["password"]:
                 return {
                     "message": "Invalid password!",
                     "data": None,
                     "error": "Bad Request"
                 }, 400
-            Profile .query.filter_by(user_id=current_user.id).delete()
+            Profile.query.filter_by(user_id=current_user.id).delete()
             Post.query.filter_by(user_id=current_user.id).delete()
             Likes.query.filter_by(user_id=current_user.id).delete()
             Comments.query.filter_by(user_id=current_user.id).delete()
@@ -145,16 +154,16 @@ def delete_user(current_user):
             #  decrease the no of followers of the user who is following the current user
             followers = Follow.query.filter_by(followed_id=current_user.id).all()
             for follower in followers:
-                Profile = Profile.query.filter_by(user_id=follower.follower_id).first()
-                Profile.no_of_followers -= 1
-                Profile.save()
+                profile = Profile.query.filter_by(user_id=follower.follower_id).first()
+                profile.no_of_followers -= 1
+                profile.save()
             Follow.query.filter_by(follower_id=current_user.id).delete()
             #  decrease the no of following of the user who is followed by the current user
             followings = Follow.query.filter_by(follower_id=current_user.id).all()
             for following in followings:
-                Profile = Profile.query.filter_by(user_id=following.followed_id).first()
-                Profile.no_of_following -= 1
-                Profile.save()
+                profile = Profile.query.filter_by(user_id=following.followed_id).first()
+                profile.no_of_following -= 1
+                profile.save()
 
             user.delete()
 
@@ -177,9 +186,7 @@ def delete_user(current_user):
 
 
 
-
-
-#  read user and Profile sucess
+#  read user and Profile
 @app.route("/api/user", methods=["GET"] , endpoint="get_user")
 @token_required
 def get_user(current_user):
@@ -224,10 +231,12 @@ def get_user_by_username(current_user,username):
         "error": "Not Found"
     }, 404
 
+
+
 @app.route("/api/user", methods=["PUT"], endpoint="update_user")
 @token_required
 def update_user(current_user):
-    Profile = Profile.query.filter_by(user_id=current_user.id).first()
+    profile = Profile.query.filter_by(user_id=current_user.id).first()
     user = User.query.filter_by(id=current_user.id).first()
     if user:
         # get form data
@@ -240,23 +249,24 @@ def update_user(current_user):
             }, 400
         user.email = data["email"]
         if data['report_type'] == 'html format':
-            Profile.report_type = 'html'
-
+            profile.report_type = 'html'
+        elif data['report_type'] == 'pdf format':
+            profile.report_type = 'pdf'
         else:
-            data['report_type'] == 'pdf'
+            profile.report_type = 'html'
         # Profile.image = data["image"]
         # handel image and save it to the database
         if request.files:
             image = request.files['image']
             # save image to the database
-            Profile.image = image.read()
+            profile.image = image.read()
         user.update()
-        Profile.update()
+        profile.update()
         return {
             'message':  'User updated successfully!',
             'data': {
                 'user': user.to_json(),
-                # 'Profile': Profile.to_json()
+                'Profile': Profile.to_json(profile)
             },
             'error': None
         }, 200
@@ -266,8 +276,6 @@ def update_user(current_user):
         'error': 'Not Found'
     }, 404
     
-
-
 
 
 # read Posts sucess

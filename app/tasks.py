@@ -5,11 +5,11 @@ from celery.schedules import crontab
 @celery.on_after_configure.connect
 def setup_periodic_tasks(sender, **kwargs):
     sender.add_periodic_task(
-        crontab(minute='*/2'),
+        crontab(hour=0,minute=0),
         monthly_reminder.s(),
     )
     sender.add_periodic_task(
-        crontab(minute='*/5'),
+        crontab(hour=0, minute=0),
         daily_reminder.s(),
     )
 @celery.task

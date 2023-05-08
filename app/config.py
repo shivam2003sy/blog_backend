@@ -1,10 +1,12 @@
 import os
 from   decouple import config
 basedir = os.path.abspath(os.path.dirname(__file__))
+
 class Config():
     CSRF_ENABLED = True
     SECRET_KEY = config('SECRET_KEY', default='abcdefghijklmnopqrst')
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'bloglite.sqlite3')
+    # SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'bloglite.sqlite3')
+    SQLALCHEMY_DATABASE_URI = 'postgresql://wtghexqb:lrBw78aFPZhdvW6imWpQqgVcMOh-wbZV@arjuna.db.elephantsql.com/wtghexqb'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CELERY_BROKER_URL = 'redis://127.0.0.1:6379/2'
     CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/1'
